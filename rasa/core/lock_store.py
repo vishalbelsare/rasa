@@ -143,16 +143,16 @@ class LockStore:
 
     def update_lock(self, conversation_id: Text) -> None:
         """Fetch lock for `conversation_id`, remove expired tickets and save lock."""
-
         lock = self.get_lock(conversation_id)
         if lock:
             lock.remove_expired_tickets()
             self.save_lock(lock)
 
     def get_or_create_lock(self, conversation_id: Text) -> TicketLock:
-        """Fetch existing lock for `conversation_id` or create a new one if
-        it doesn't exist."""
+        """Fetch existing lock for `conversation_id`.
 
+        Alternatively, create a new one if it doesn't exist.
+        """
         existing_lock = self.get_lock(conversation_id)
 
         if existing_lock:
@@ -161,9 +161,7 @@ class LockStore:
         return self.create_lock(conversation_id)
 
     def is_someone_waiting(self, conversation_id: Text) -> bool:
-        """Return whether someone is waiting for lock associated with
-        `conversation_id`."""
-
+        """Return whether someone is waiting for lock for this `conversation_id`."""
         lock = self.get_lock(conversation_id)
         if lock:
             return lock.is_someone_waiting()
@@ -175,7 +173,6 @@ class LockStore:
 
         Removes ticket from lock and saves lock.
         """
-
         lock = self.get_lock(conversation_id)
         if lock:
             lock.remove_ticket_for(ticket_number)
@@ -183,7 +180,6 @@ class LockStore:
 
     def cleanup(self, conversation_id: Text, ticket_number: int) -> None:
         """Remove lock for `conversation_id` if no one is waiting."""
-
         self.finish_serving(conversation_id, ticket_number)
         if not self.is_someone_waiting(conversation_id):
             self.delete_lock(conversation_id)
@@ -204,8 +200,12 @@ class RedisLockStore(LockStore):
         host: Text = "localhost",
         port: int = 6379,
         db: int = 1,
+        username: Optional[Text] = None,
         password: Optional[Text] = None,
         use_ssl: bool = False,
+        ssl_certfile: Optional[Text] = None,
+        ssl_keyfile: Optional[Text] = None,
+        ssl_ca_certs: Optional[Text] = None,
         key_prefix: Optional[Text] = None,
         socket_timeout: float = DEFAULT_SOCKET_TIMEOUT_IN_SECONDS,
     ) -> None:
@@ -216,9 +216,14 @@ class RedisLockStore(LockStore):
             port: The port of the redis server.
             db: The name of the database within Redis which should be used by Rasa
                 Open Source.
+            username: The username which should be used for authentication with the
+                Redis database.
             password: The password which should be used for authentication with the
                 Redis database.
             use_ssl: `True` if SSL should be used for the connection to Redis.
+            ssl_certfile: Path to the SSL certificate file.
+            ssl_keyfile: Path to the SSL private key file.
+            ssl_ca_certs: Path to the SSL CA certificate file.
             key_prefix: prefix to prepend to all keys used by the lock store. Must be
                 alphanumeric.
             socket_timeout: Timeout in seconds after which an exception will be raised
@@ -230,8 +235,12 @@ class RedisLockStore(LockStore):
             host=host,
             port=int(port),
             db=int(db),
+            username=username,
             password=password,
             ssl=use_ssl,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            ssl_ca_certs=ssl_ca_certs,
             socket_timeout=socket_timeout,
         )
 

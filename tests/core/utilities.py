@@ -38,7 +38,7 @@ def mocked_cmd_input(package, text: Text):
     text_generator = itertools.cycle(text)
     i = package._get_user_input
 
-    def mocked_input(*args, **kwargs):
+    async def mocked_input(*args, **kwargs):
         value = next(text_generator)
         print(f"wrote '{value}' to input")
         return value
@@ -53,7 +53,7 @@ def mocked_cmd_input(package, text: Text):
 def user_uttered(
     text: Text,
     confidence: float = 1.0,
-    metadata: Dict[Text, Any] = None,
+    metadata: Optional[Dict[Text, Any]] = None,
     timestamp: Optional[float] = None,
 ) -> UserUttered:
     parse_data = {"intent": {INTENT_NAME_KEY: text, "confidence": confidence}}

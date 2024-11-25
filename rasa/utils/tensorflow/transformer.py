@@ -7,6 +7,7 @@ import tensorflow as tf
 from keras.utils.control_flow_util import smart_cond
 from tensorflow.keras import backend as K
 
+import rasa.shared.utils.cli
 from rasa.utils.tensorflow.layers import RandomlyConnectedDense
 
 
@@ -47,9 +48,9 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         super().__init__()
 
         if units % num_heads != 0:
-            raise ValueError(
-                f"number of units {units} should be proportional to "
-                f"number of attention heads {num_heads}."
+            rasa.shared.utils.cli.print_error_and_exit(
+                f"Value Error: The given transformer size {units} should be a "
+                f"multiple of the number of attention heads {num_heads}."
             )
 
         self.num_heads = num_heads
@@ -160,7 +161,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             A tensor of shape (batch, num_heads, length, length, depth)
             or (batch, num_heads, length, length)
         """
-
         x_dim = len(x.shape)
 
         if x_dim < 4 or x_dim > 5:
@@ -285,7 +285,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             output: A tensor with shape (..., length, depth).
             attention_weights: A tensor with shape (..., length, length).
         """
-
         matmul_qk = tf.matmul(query, key, transpose_b=True)  # (..., length, length)
 
         if self.use_key_relative_position:
@@ -319,7 +318,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         Transpose the result such that the shape is
         (batch_size, num_heads, length, depth)
         """
-
         x = tf.reshape(x, (tf.shape(x)[0], -1, self.num_heads, self._depth))
         return tf.transpose(x, perm=[0, 2, 1, 3])
 
@@ -332,7 +330,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         Returns:
             A Tensor with shape [batch, length, units]
         """
-
         # (batch_size, length, num_heads, depth)
         x = tf.transpose(x, perm=[0, 2, 1, 3])
         # (batch_size, length, units)

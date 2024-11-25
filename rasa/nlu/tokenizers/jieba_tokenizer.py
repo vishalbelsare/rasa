@@ -41,6 +41,8 @@ class JiebaTokenizer(Tokenizer):
             "intent_split_symbol": "_",
             # Regular expression to detect tokens
             "token_pattern": None,
+            # Symbol on which prefix should be split
+            "prefix_separator_symbol": None,
         }
 
     def __init__(
@@ -67,8 +69,8 @@ class JiebaTokenizer(Tokenizer):
             cls._load_custom_dictionary(dictionary_path)
         return cls(config, model_storage, resource)
 
-    @classmethod
-    def required_packages(cls) -> List[Text]:
+    @staticmethod
+    def required_packages() -> List[Text]:
         """Any extra python dependencies required for this component to run."""
         return ["jieba"]
 

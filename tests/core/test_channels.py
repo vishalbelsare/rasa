@@ -1,4 +1,7 @@
+# file deepcode ignore HardcodedNonCryptoSecret/test: Secrets are all just examples for tests. # noqa: E501
+
 import logging
+
 import jwt
 from typing import Dict
 from unittest.mock import patch, MagicMock
@@ -6,6 +9,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from _pytest.logging import LogCaptureFixture
 from _pytest.monkeypatch import MonkeyPatch
+from aiogram.utils.exceptions import TelegramAPIError
 from aiohttp import ClientTimeout
 from aioresponses import aioresponses
 from sanic import Sanic
@@ -31,7 +35,7 @@ from tests.utilities import json_of_latest_request, latest_request
 logger = logging.getLogger(__name__)
 
 
-def noop(*args, **kwargs):
+async def noop(*args, **kwargs):
     """Just do nothing."""
     pass
 
@@ -277,7 +281,9 @@ def test_telegram_channel():
     )
 
 
-def test_telegram_channel_raise_rasa_exception_webhook_not_set():
+def test_telegram_channel_raise_rasa_exception_webhook_not_set(
+    monkeypatch: MonkeyPatch,
+):
     from rasa.core.channels.telegram import TelegramInput
 
     input_channel = TelegramInput(
@@ -287,6 +293,12 @@ def test_telegram_channel_raise_rasa_exception_webhook_not_set():
         verify="YOUR_TELEGRAM_BOT",
         # the url your bot should listen for messages
         webhook_url="",
+    )
+
+    monkeypatch.setattr(
+        rasa.core.channels.telegram.TelegramOutput,
+        "set_webhook",
+        MagicMock(side_effect=TelegramAPIError("Error from Telegram.")),
     )
 
     with pytest.raises(RasaException) as e:
@@ -356,6 +368,29 @@ def test_socketio_channel():
         user_message_evt="user_uttered",
         # event name for messages sent from the bot
         bot_message_evt="bot_uttered",
+        # socket.io namespace to use for the messages
+        namespace=None,
+    )
+
+    s = rasa.core.run.configure_app([input_channel], port=5004)
+    # END DOC INCLUDE
+    # the above marker marks the end of the code snipped included
+    # in the docs
+    routes_list = utils.list_routes(s)
+    assert routes_list["socketio_webhook.health"].startswith("/webhooks/socketio")
+    assert routes_list["handle_request"].startswith("/socket.io")
+
+
+def test_socketio_channel_metadata():
+    from rasa.core.channels.socketio import SocketIOInput
+
+    input_channel = SocketIOInput(
+        # event name for messages sent from the user
+        user_message_evt="user_uttered",
+        # event name for messages sent from the bot
+        bot_message_evt="bot_uttered",
+        # optional metadata key name
+        metadata_key="customData",
         # socket.io namespace to use for the messages
         namespace=None,
     )

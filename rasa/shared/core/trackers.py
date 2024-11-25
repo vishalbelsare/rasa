@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+import itertools
 import logging
 import os
 import time
@@ -25,7 +26,7 @@ from typing import (
 )
 
 import rasa.shared.utils.io
-from rasa.shared.constants import DEFAULT_SENDER_ID
+from rasa.shared.constants import ASSISTANT_ID_KEY, DEFAULT_SENDER_ID
 from rasa.shared.nlu.constants import (
     ENTITY_ATTRIBUTE_VALUE,
     ENTITY_ATTRIBUTE_TYPE,
@@ -110,7 +111,8 @@ class AnySlotDict(dict):
     """A slot dictionary that pretends every slot exists, by creating slots on demand.
 
     This only uses the generic slot type! This means certain functionality wont work,
-    e.g. properly featurizing the slot."""
+    e.g. properly featurizing the slot.
+    """
 
     def __missing__(self, key: Text) -> Slot:
         value = self[key] = AnySlot(key, mappings=[])
@@ -124,7 +126,8 @@ class DialogueStateTracker:
     """Maintains the state of a conversation.
 
     The field max_event_history will only give you these last events,
-    it can be set in the tracker_store"""
+    it can be set in the tracker_store.
+    """
 
     @classmethod
     def from_dict(
@@ -186,8 +189,8 @@ class DialogueStateTracker:
 
         A set of events can be stored externally, and we will run through all
         of them to get the current state. The tracker will represent all the
-        information we captured while processing messages of the dialogue."""
-
+        information we captured while processing messages of the dialogue.
+        """
         # maximum number of events to store
         self._max_event_history = max_event_history
         # list of previously seen events
@@ -222,6 +225,7 @@ class DialogueStateTracker:
 
         # Optional model_id to add to all events.
         self.model_id: Optional[Text] = None
+        self.assistant_id: Optional[Text] = None
 
     ###
     # Public tracker interface
@@ -271,7 +275,7 @@ class DialogueStateTracker:
         parse_data_with_nlu_state = self.latest_message.parse_data.copy()
         # Combine entities predicted by NLU with entities predicted by policies so that
         # users can access them together via `latest_message` (e.g. in custom actions)
-        parse_data_with_nlu_state[ENTITIES] = self.latest_message.entities  # type: ignore[misc]  # noqa: E501
+        parse_data_with_nlu_state[ENTITIES] = self.latest_message.entities  # type: ignore[literal-required]  # noqa: E501
 
         return parse_data_with_nlu_state
 
@@ -383,6 +387,32 @@ class DialogueStateTracker:
             logger.info(f"Tried to access non existent slot '{key}'")
             return None
 
+    def has_bot_message_after_latest_user_message(self) -> bool:
+        """Checks if there is a bot message after the most recent user message.
+
+        Returns:
+            `True` if there is an action after the most recent user message.
+        """
+        for event in reversed(self.applied_events()):
+            if isinstance(event, BotUttered):
+                return True
+            elif isinstance(event, UserUttered):
+                return False
+        return False
+
+    def has_action_after_latest_user_message(self) -> bool:
+        """Check if there is an action after the most recent user message.
+
+        Returns:
+            `True` if there is an action after the most recent user message.
+        """
+        for event in reversed(self.applied_events()):
+            if isinstance(event, ActionExecuted):
+                return True
+            elif isinstance(event, UserUttered):
+                return False
+        return False
+
     def get_latest_entity_values(
         self,
         entity_type: Text,
@@ -393,7 +423,7 @@ class DialogueStateTracker:
         group in latest message.
 
         If you are only interested in the first entity of a given type use
-        `next(tracker.get_latest_entity_values("my_entity_name"), None)`.
+        `next(tracker.get_latest_entity_values(`"`my_entity_name`"`), None)`.
         If no entity is found `None` is the default result.
 
         Args:
@@ -416,8 +446,7 @@ class DialogueStateTracker:
         )
 
     def get_latest_input_channel(self) -> Optional[Text]:
-        """Get the name of the input_channel of the latest UserUttered event"""
-
+        """Get the name of the input_channel of the latest UserUttered event."""
         for e in reversed(self.events):
             if isinstance(e, UserUttered):
                 return e.input_channel
@@ -430,8 +459,8 @@ class DialogueStateTracker:
     def idx_after_latest_restart(self) -> int:
         """Return the idx of the most recent restart in the list of events.
 
-        If the conversation has not been restarted, ``0`` is returned."""
-
+        If the conversation has not been restarted, ``0`` is returned.
+        """
         for i, event in enumerate(reversed(self.events)):
             if isinstance(event, Restarted):
                 return len(self.events) - i
@@ -593,7 +622,6 @@ class DialogueStateTracker:
 
     def replay_events(self) -> None:
         """Update the tracker based on a list of events."""
-
         applied_events = self.applied_events()
         for event in applied_events:
             event.apply_to(self)
@@ -603,8 +631,8 @@ class DialogueStateTracker:
 
         This uses the state as is persisted in a ``TrackerStore``. If the
         tracker is blank before calling this method, the final state will be
-        identical to the tracker from which the dialogue was created."""
-
+        identical to the tracker from which the dialogue was created.
+        """
         if not isinstance(dialogue, Dialogue):
             raise ValueError(
                 f"story {dialogue} is not of type Dialogue. "
@@ -616,7 +644,7 @@ class DialogueStateTracker:
         self.replay_events()
 
     def copy(self) -> "DialogueStateTracker":
-        """Creates a duplicate of this tracker"""
+        """Creates a duplicate of this tracker."""
         return self.travel_back_in_time(float("inf"))
 
     def travel_back_in_time(self, target_time: float) -> "DialogueStateTracker":
@@ -624,8 +652,8 @@ class DialogueStateTracker:
 
         A new tracker will be created and all events previous to the
         passed time stamp will be replayed. Events that occur exactly
-        at the target time will be included."""
-
+        at the target time will be included.
+        """
         tracker = self.init_copy()
 
         for event in self.events:
@@ -640,8 +668,8 @@ class DialogueStateTracker:
         """Return a ``Dialogue`` object containing all of the turns.
 
         This can be serialised and later used to recover the state
-        of this tracker exactly."""
-
+        of this tracker exactly.
+        """
         return Dialogue(self.sender_id, list(self.events))
 
     def update(self, event: Event, domain: Optional[Domain] = None) -> None:
@@ -651,6 +679,9 @@ class DialogueStateTracker:
 
         if self.model_id and METADATA_MODEL_ID not in event.metadata:
             event.metadata = {**event.metadata, METADATA_MODEL_ID: self.model_id}
+
+        if self.assistant_id and ASSISTANT_ID_KEY not in event.metadata:
+            event.metadata = {**event.metadata, ASSISTANT_ID_KEY: self.assistant_id}
 
         self.events.append(event)
         event.apply_to(self)
@@ -687,7 +718,7 @@ class DialogueStateTracker:
             if include_source
             else self.sender_id
         )
-        return Story.from_events(self.applied_events(), story_name)
+        return Story.from_events(list(self.events), story_name)
 
     def export_stories(
         self,
@@ -723,7 +754,7 @@ class DialogueStateTracker:
     def get_last_event_for(
         self,
         event_type: Union[Type["EventTypeAlias"], Tuple[Type["EventTypeAlias"], ...]],
-        action_names_to_exclude: List[Text] = None,
+        action_names_to_exclude: Optional[List[Text]] = None,
         skip: int = 0,
         event_verbosity: EventVerbosity = EventVerbosity.APPLIED,
     ) -> Optional["EventTypeAlias"]:
@@ -803,7 +834,6 @@ class DialogueStateTracker:
             )
 
     def _create_events(self, evts: List[Event]) -> Deque[Event]:
-
         if evts and not isinstance(evts[0], Event):  # pragma: no cover
             raise ValueError("events, if given, must be a list of events")
         return deque(evts, self._max_event_history)
@@ -819,12 +849,10 @@ class DialogueStateTracker:
 
     def trigger_followup_action(self, action: Text) -> None:
         """Triggers another action following the execution of the current."""
-
         self.followup_action = action
 
     def clear_followup_action(self) -> None:
         """Clears follow up action when it was executed."""
-
         self.followup_action = None
 
     @property
@@ -876,6 +904,24 @@ class DialogueStateTracker:
             data["events"] = list(self.events)
 
         return rasa.shared.utils.io.get_dictionary_fingerprint(data)
+
+
+class TrackerEventDiffEngine:
+    """Computes event difference of two trackers."""
+
+    @staticmethod
+    def event_difference(
+        original: DialogueStateTracker, tracker: DialogueStateTracker
+    ) -> List[Event]:
+        """Returns all events from the new tracker which are not present
+        in the original tracker.
+
+        Args:
+            tracker: Tracker containing events from the current conversation session.
+        """
+        offset = len(original.events) if original else 0
+        events = tracker.events
+        return list(itertools.islice(events, offset, len(events)))
 
 
 def get_active_loop_name(
@@ -937,6 +983,7 @@ def get_trackers_for_conversation_sessions(
             evts,
             tracker.slots.values(),
             sender_source=tracker.sender_source,
+            max_event_history=tracker._max_event_history,
         )
         for evts in split_conversations
     ]

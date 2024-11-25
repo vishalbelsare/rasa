@@ -1,20 +1,13 @@
-import argparse
 import os
 from pathlib import Path
-from unittest.mock import Mock
-import pytest
-from collections import namedtuple
-from typing import Callable, Text
+from typing import Callable
 
 from _pytest.fixtures import FixtureRequest
-from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pytester import RunResult
-from rasa.cli import data
-from rasa.shared.constants import LATEST_TRAINING_DATA_FORMAT_VERSION
-from rasa.shared.importers.importer import TrainingDataImporter
 from rasa.shared.nlu.training_data.formats import RasaYAMLReader
-from rasa.validator import Validator
 import rasa.shared.utils.io
+
+from tests.cli.conftest import RASA_EXE
 
 
 def test_data_split_nlu(run_in_simple_project: Callable[..., RunResult]):
@@ -112,8 +105,9 @@ def test_data_convert_nlu_yml(
 def test_data_split_help(run: Callable[..., RunResult]):
     output = run("data", "split", "nlu", "--help")
 
-    help_text = """usage: rasa data split nlu [-h] [-v] [-vv] [--quiet] [-u NLU]
-                           [--training-fraction TRAINING_FRACTION]
+    help_text = f"""usage: {RASA_EXE} data split nlu [-h] [-v] [-vv] [--quiet]\n
+                           [--logging-config-file LOGGING_CONFIG_FILE]\n
+                           [-u NLU] [--training-fraction TRAINING_FRACTION]\n
                            [--random-seed RANDOM_SEED] [--out OUT]"""
 
     lines = help_text.split("\n")
@@ -126,241 +120,138 @@ def test_data_split_help(run: Callable[..., RunResult]):
 def test_data_convert_help(run: Callable[..., RunResult]):
     output = run("data", "convert", "nlu", "--help")
 
-    help_text = """usage: rasa data convert nlu [-h] [-v] [-vv] [--quiet] [-f {json,yaml}]
-                             [--data DATA [DATA ...]] [--out OUT]
-                             [-l LANGUAGE]"""
+    help_text = f"""usage: {RASA_EXE} data convert nlu [-h] [-v] [-vv] [--quiet]\n
+                           [--logging-config-file LOGGING_CONFIG_FILE]\n
+                           [-f {"{json,yaml}"}] [--data DATA [DATA ...]]"""
 
     lines = help_text.split("\n")
     # expected help text lines should appear somewhere in the output
-    printed_help = set(output.outlines)
+    printed_help = {line.strip() for line in output.outlines}
     for line in lines:
-        assert line in printed_help
+        assert line.strip() in printed_help
 
 
 def test_data_validate_help(run: Callable[..., RunResult]):
     output = run("data", "validate", "--help")
 
-    help_text = """usage: rasa data validate [-h] [-v] [-vv] [--quiet]
+    help_text = f"""usage: {RASA_EXE} data validate [-h] [-v] [-vv] [--quiet]
+                          [--logging-config-file LOGGING_CONFIG_FILE]
                           [--max-history MAX_HISTORY] [-c CONFIG]
                           [--fail-on-warnings] [-d DOMAIN]
                           [--data DATA [DATA ...]]
-                          {stories} ..."""
+                          {{stories}} ..."""
 
     lines = help_text.split("\n")
     # expected help text lines should appear somewhere in the output
-    printed_help = set(output.outlines)
+    printed_help = {line.strip() for line in output.outlines}
     for line in lines:
-        assert line in printed_help
+        assert line.strip() in printed_help
 
 
 def test_data_migrate_help(run: Callable[..., RunResult]):
     output = run("data", "migrate", "--help")
     printed_help = set(output.outlines)
 
-    help_text = "usage: rasa data migrate [-h] [-v] [-vv] [--quiet] [-d DOMAIN] [--out OUT]"  # noqa: E501
-    assert help_text in printed_help
+    help_text = f"""usage: {RASA_EXE} data migrate [-h] [-v] [-vv] [--quiet]
+                          [--logging-config-file LOGGING_CONFIG_FILE]
+                          [-d DOMAIN] [--out OUT]"""
+    lines = help_text.split("\n")
+    # expected help text lines should appear somewhere in the output
+    printed_help = {line.strip() for line in output.outlines}
+    for line in lines:
+        assert line.strip() in printed_help
 
 
-def test_data_validate_stories_with_max_history_zero(monkeypatch: MonkeyPatch):
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(help="Rasa commands")
-    data.add_subparser(subparsers, parents=[])
-
-    args = parser.parse_args(
-        [
-            "data",
-            "validate",
-            "stories",
-            "--data",
-            "data/test_moodbot/data",
-            "--max-history",
-            0,
-        ]
-    )
-
-    def mock_from_importer(importer: TrainingDataImporter) -> Validator:
-        return Mock()
-
-    monkeypatch.setattr("rasa.validator.Validator.from_importer", mock_from_importer)
-
-    with pytest.raises(argparse.ArgumentTypeError):
-        data.validate_files(args)
-
-
-@pytest.mark.parametrize(
-    ("file_type", "data_type"), [("stories", "story"), ("rules", "rule")]
-)
-def test_validate_files_action_not_found_invalid_domain(
-    file_type: Text, data_type: Text, tmp_path: Path
+def test_data_validate_default_options(
+    run_in_simple_project: Callable[..., RunResult], request: FixtureRequest
 ):
-    file_name = tmp_path / f"{file_type}.yml"
-    file_name.write_text(
-        f"""
-        version: "{LATEST_TRAINING_DATA_FORMAT_VERSION}"
-        {file_type}:
-        - {data_type}: test path
-          steps:
-          - intent: goodbye
-          - action: action_test
-        """
+    test_data_dir = Path(request.config.rootdir, "data", "test_moodbot", "data")
+    test_domain = Path(request.config.rootdir, "data", "test_moodbot", "domain.yml")
+    test_config = Path(request.config.rootdir, "data", "test_moodbot", "config.yml")
+
+    result = run_in_simple_project(
+        "data",
+        "validate",
+        "--data",
+        str(test_data_dir),
+        "--domain",
+        str(test_domain),
+        "-c",
+        str(test_config),
     )
-    args = {
-        "domain": "data/test_moodbot/domain.yml",
-        "data": [file_name],
-        "max_history": None,
-        "config": None,
-    }
-    with pytest.raises(SystemExit):
-        data.validate_files(namedtuple("Args", args.keys())(*args.values()))
+
+    # should not raise any errors
+    assert result.ret == 0
 
 
-@pytest.mark.parametrize(
-    ("file_type", "data_type"), [("stories", "story"), ("rules", "rule")]
-)
-def test_validate_files_form_not_found_invalid_domain(
-    file_type: Text, data_type: Text, tmp_path: Path
+def test_data_validate_not_used_warning(
+    run_in_simple_project: Callable[..., RunResult], request: FixtureRequest
 ):
-    file_name = tmp_path / f"{file_type}.yml"
-    file_name.write_text(
-        f"""
-        version: "{LATEST_TRAINING_DATA_FORMAT_VERSION}"
-        {file_type}:
-        - {data_type}: test path
-          steps:
-            - intent: request_restaurant
-            - action: restaurant_form
-            - active_loop: restaurant_form
-        """
+    test_data_dir = Path(request.config.rootdir, "data", "test_validation", "data")
+    test_domain = Path(request.config.rootdir, "data", "test_validation", "domain.yml")
+    test_config = Path(request.config.rootdir, "data", "test_moodbot", "config.yml")
+
+    result = run_in_simple_project(
+        "data",
+        "validate",
+        "--data",
+        str(test_data_dir),
+        "--domain",
+        str(test_domain),
+        "-c",
+        str(test_config),
     )
-    args = {
-        "domain": "data/test_restaurantbot/domain.yml",
-        "data": [file_name],
-        "max_history": None,
-        "config": None,
-    }
-    with pytest.raises(SystemExit):
-        data.validate_files(namedtuple("Args", args.keys())(*args.values()))
+
+    for warning in [
+        "The intent 'goodbye' is not used in any story or rule.",
+        "The utterance 'utter_chatter' is not used in any story or rule.",
+    ]:
+        assert warning in str(result.stderr)
 
 
-@pytest.mark.parametrize(
-    ("file_type", "data_type"), [("stories", "story"), ("rules", "rule")]
-)
-def test_validate_files_with_active_loop_null(
-    file_type: Text, data_type: Text, tmp_path: Path
+def test_data_validate_failed_to_load_domain(
+    run_in_simple_project_with_no_domain: Callable[..., RunResult]
 ):
-    file_name = tmp_path / f"{file_type}.yml"
-    file_name.write_text(
-        f"""
-        version: "{LATEST_TRAINING_DATA_FORMAT_VERSION}"
-        {file_type}:
-        - {data_type}: test path
-          steps:
-            - intent: request_restaurant
-            - action: restaurant_form
-            - active_loop: restaurant_form
-            - active_loop: null
-            - action: action_search_restaurants
-        """
+    result = run_in_simple_project_with_no_domain(
+        "data",
+        "validate",
+        "--domain",
+        "not-existing-domain.yml",
     )
-    args = {
-        "domain": "data/test_domains/restaurant_form.yml",
-        "data": [file_name],
-        "max_history": None,
-        "config": None,
-        "fail_on_warnings": False,
-    }
-    with pytest.warns(None):
-        data.validate_files(namedtuple("Args", args.keys())(*args.values()))
+
+    assert "The path 'not-existing-domain.yml' does not exist." in str(result.outlines)
+    assert result.ret == 1
 
 
-def test_validate_files_form_slots_not_matching(tmp_path: Path):
-    domain_file_name = tmp_path / "domain.yml"
-    domain_file_name.write_text(
-        f"""
-        version: "{LATEST_TRAINING_DATA_FORMAT_VERSION}"
-        forms:
-          name_form:
-            required_slots:
-            - first_name
-            - last_name
-        slots:
-             first_name:
-                type: text
-                mappings:
-                - type: from_text
-             last_nam:
-                type: text
-                mappings:
-                - type: from_text
-        """
+def test_data_split_stories(run_in_simple_project: Callable[..., RunResult]):
+    stories_yml = (
+        "stories:\n"
+        "- story: story 1\n"
+        "  steps:\n"
+        "  - intent: intent_a\n"
+        "  - action: utter_a\n"
+        "- story: story 2\n"
+        "  steps:\n"
+        "  - intent: intent_a\n"
+        "  - action: utter_a\n"
     )
-    args = {
-        "domain": domain_file_name,
-        "data": None,
-        "max_history": None,
-        "config": None,
-    }
-    with pytest.raises(SystemExit):
-        data.validate_files(namedtuple("Args", args.keys())(*args.values()))
 
-
-def test_validate_files_exit_early():
-    with pytest.raises(SystemExit) as pytest_e:
-        args = {
-            "domain": "data/test_domains/duplicate_intents.yml",
-            "data": None,
-            "max_history": None,
-            "config": None,
-        }
-        data.validate_files(namedtuple("Args", args.keys())(*args.values()))
-
-    assert pytest_e.type == SystemExit
-    assert pytest_e.value.code == 1
-
-
-def test_validate_files_invalid_domain():
-    args = {
-        "domain": "data/test_domains/default_with_mapping.yml",
-        "data": None,
-        "max_history": None,
-        "config": None,
-    }
-
-    with pytest.raises(SystemExit):
-        data.validate_files(namedtuple("Args", args.keys())(*args.values()))
-        with pytest.warns(UserWarning) as w:
-            assert "Please migrate to RulePolicy." in str(w[0].message)
-
-
-def test_validate_files_invalid_slot_mappings(tmp_path: Path):
-    domain = tmp_path / "domain.yml"
-    slot_name = "started_booking_form"
-    domain.write_text(
-        f"""
-            version: "{LATEST_TRAINING_DATA_FORMAT_VERSION}"
-            intents:
-            - activate_booking
-            entities:
-            - city
-            slots:
-              {slot_name}:
-                type: bool
-                influence_conversation: false
-                mappings:
-                - type: from_trigger_intent
-                  intent: activate_booking
-                  value: true
-              location:
-                type: text
-                mappings:
-                - type: from_entity
-                  entity: city
-            forms:
-              booking_form:
-                required_slots:
-                - location
-                """
+    Path("data/stories.yml").write_text(stories_yml)
+    run_in_simple_project(
+        "data", "split", "stories", "--random-seed", "123", "--training-fraction", "0.5"
     )
-    args = {"domain": str(domain), "data": None, "max_history": None, "config": None}
-    with pytest.raises(SystemExit):
-        data.validate_files(namedtuple("Args", args.keys())(*args.values()))
+
+    folder = Path("train_test_split")
+    assert folder.exists()
+
+    train_file = folder / "train_stories.yml"
+    assert train_file.exists()
+    test_file = folder / "test_stories.yml"
+    assert test_file.exists()
+
+    train_data = rasa.shared.utils.io.read_yaml_file(train_file)
+    assert len(train_data.get("stories", [])) == 1
+    assert train_data["stories"][0].get("story") == "story 1"
+    test_data = rasa.shared.utils.io.read_yaml_file(test_file)
+    assert len(test_data.get("stories", [])) == 1
+    assert test_data["stories"][0].get("story") == "story 2"

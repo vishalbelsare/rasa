@@ -1,4 +1,3 @@
-import tempfile
 import time
 from pathlib import Path
 from typing import Text, NamedTuple, Optional, List, Union, Dict, Any
@@ -13,11 +12,12 @@ from rasa.engine.storage.local_model_storage import LocalModelStorage
 from rasa.engine.storage.storage import ModelStorage
 from rasa.engine.training.components import FingerprintStatus
 from rasa.engine.training.graph_trainer import GraphTrainer
+from rasa.shared.core.events import SlotSet
+from rasa.shared.core.training_data.structures import StoryGraph
 from rasa.shared.data import TrainingType
 from rasa.shared.importers.importer import TrainingDataImporter
 from rasa import telemetry
 from rasa.shared.core.domain import Domain
-import rasa.shared.utils.common
 import rasa.utils.common
 import rasa.shared.utils.common
 import rasa.shared.utils.cli
@@ -28,6 +28,7 @@ import rasa.model
 
 CODE_NEEDS_TO_BE_RETRAINED = 0b0001
 CODE_FORCED_TRAINING = 0b1000
+CODE_NO_NEED_TO_TRAIN = 0b0000
 
 
 class TrainingResult(NamedTuple):
@@ -73,7 +74,54 @@ def _dry_run_result(
         "No training of components required "
         "(the responses might still need updating!)."
     )
-    return TrainingResult(dry_run_results=fingerprint_results)
+    return TrainingResult(
+        code=CODE_NO_NEED_TO_TRAIN, dry_run_results=fingerprint_results
+    )
+
+
+def get_unresolved_slots(domain: Domain, stories: StoryGraph) -> List[Text]:
+    """Returns a list of unresolved slots.
+
+    Args:
+        domain: The domain.
+        stories: The story graph.
+
+    Returns:
+        A list of unresolved slots.
+    """
+    return list(
+        set(
+            evnt.key
+            for step in stories.story_steps
+            for evnt in step.events
+            if isinstance(evnt, SlotSet)
+        )
+        - set(slot.name for slot in domain.slots)
+    )
+
+
+def _check_unresolved_slots(domain: Domain, stories: StoryGraph) -> None:
+    """Checks if there are any unresolved slots.
+
+    Args:
+        domain: The domain.
+        stories: The story graph.
+
+    Raises:
+        `Sys exit` if there are any unresolved slots.
+
+    Returns:
+        `None` if there are no unresolved slots.
+    """
+    unresolved_slots = get_unresolved_slots(domain, stories)
+    if unresolved_slots:
+        rasa.shared.utils.cli.print_error_and_exit(
+            f"Unresolved slots found in stories/rules🚨 \n"
+            f'Tried to set slots "{unresolved_slots}" that are not present in'
+            f"your domain.\n Check whether they need to be added to the domain or "
+            f"whether there is a spelling error."
+        )
+    return None
 
 
 def train(
@@ -115,7 +163,7 @@ def train(
         An instance of `TrainingResult`.
     """
     file_importer = TrainingDataImporter.load_from_config(
-        config, domain, training_files
+        config, domain, training_files, core_additional_arguments
     )
 
     stories = file_importer.get_stories()
@@ -155,6 +203,8 @@ def train(
             "No NLU data present. Just a Rasa Core model will be trained."
         )
         training_type = TrainingType.CORE
+
+    _check_unresolved_slots(domain_object, stories)
 
     with telemetry.track_model_training(file_importer, model_type="rasa"):
         return _train_graph(
@@ -212,7 +262,11 @@ def _train_graph(
     )
     rasa.engine.validation.validate(model_configuration)
 
-    with tempfile.TemporaryDirectory() as temp_model_dir:
+    tempdir_name = rasa.utils.common.get_temp_dir_name()
+    # Use `TempDirectoryPath` instead of `tempfile.TemporaryDirectory` as this
+    # leads to errors on Windows when the context manager tries to delete an
+    # already deleted temporary directory (e.g. https://bugs.python.org/issue29982)
+    with rasa.utils.common.TempDirectoryPath(tempdir_name) as temp_model_dir:
         model_storage = _create_model_storage(
             is_finetuning, model_to_finetune, Path(temp_model_dir)
         )
@@ -305,7 +359,7 @@ def train_core(
 
     """
     file_importer = TrainingDataImporter.load_core_importer_from_config(
-        config, domain, [stories]
+        config, domain, [stories], additional_arguments
     )
     stories_data = file_importer.get_stories()
     nlu_data = file_importer.get_nlu_data()
@@ -332,6 +386,8 @@ def train_core(
             "train a Rasa Core model using the '--stories' argument."
         )
         return None
+
+    _check_unresolved_slots(domain, stories_data)
 
     return _train_graph(
         file_importer,
@@ -384,7 +440,7 @@ def train_nlu(
 
     # training NLU only hence the training files still have to be selected
     file_importer = TrainingDataImporter.load_nlu_importer_from_config(
-        config, domain, training_data_paths=[nlu_data]
+        config, domain, training_data_paths=[nlu_data], args=additional_arguments
     )
 
     training_data = file_importer.get_nlu_data()

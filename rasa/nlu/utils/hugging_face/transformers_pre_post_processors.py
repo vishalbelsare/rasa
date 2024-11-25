@@ -57,7 +57,6 @@ def gpt_tokens_pre_processor(token_ids: List[int]) -> List[int]:
     Returns:
         List of token ids augmented with special tokens.
     """
-
     return token_ids
 
 
@@ -110,6 +109,24 @@ def xlm_tokens_pre_processor(token_ids: List[int]) -> List[int]:
 
     token_ids.insert(0, XLM_SEP_ID)
     token_ids.append(XLM_SEP_ID)
+
+    return token_ids
+
+
+def camembert_tokens_pre_processor(token_ids: List[int]) -> List[int]:
+    """Add camembert style special tokens.
+
+    Args:
+        token_ids: List of token ids without any special tokens.
+
+    Returns:
+        List of token ids augmented with special tokens.
+    """
+    CAMEMBERT_BEG_ID = 5
+    CAMEMBERT_END_ID = 6
+
+    token_ids.insert(0, CAMEMBERT_BEG_ID)
+    token_ids.append(CAMEMBERT_END_ID)
 
     return token_ids
 
@@ -194,7 +211,6 @@ def roberta_embeddings_post_processor(
     Returns:
         sentence level embedding and post-processed sequence level embedding
     """
-
     post_processed_embedding = sequence_embeddings[1:-1]
     sentence_embedding = np.mean(post_processed_embedding, axis=0)
 
@@ -204,7 +220,7 @@ def roberta_embeddings_post_processor(
 def xlm_embeddings_post_processor(
     sequence_embeddings: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Post process embeddings from XLM models
+    """Post process embeddings from XLM models.
 
     by taking a mean over sequence embeddings and returning that as sentence
     representation. Remove first and last time steps

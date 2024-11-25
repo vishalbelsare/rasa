@@ -1,11 +1,14 @@
+import time
+import random
 import tensorflow as tf
 import numpy as np
 import logging
-import random
+import os
 from collections import defaultdict
 from typing import List, Text, Dict, Tuple, Union, Optional, Any, TYPE_CHECKING
 
 from keras.utils import tf_utils
+from keras import Model
 
 from rasa.shared.constants import DIAGNOSTIC_DATA
 from rasa.utils.tensorflow.constants import (
@@ -29,6 +32,7 @@ from rasa.utils.tensorflow.constants import (
     LEARNING_RATE,
     CONSTRAIN_SIMILARITIES,
     MODEL_CONFIDENCE,
+    RUN_EAGERLY,
 )
 from rasa.utils.tensorflow.model_data import (
     RasaModelData,
@@ -38,18 +42,16 @@ from rasa.utils.tensorflow.model_data import (
 import rasa.utils.train_utils
 from rasa.utils.tensorflow import layers
 from rasa.utils.tensorflow import rasa_layers
-from rasa.utils.tensorflow.temp_keras_modules import TmpKerasModel
 from rasa.utils.tensorflow.data_generator import (
     RasaDataGenerator,
     RasaBatchDataGenerator,
 )
 from rasa.shared.nlu.constants import TEXT
 from rasa.shared.exceptions import RasaException
-
+from rasa.utils.tensorflow.types import BatchData, MaybeNestedBatchData
 
 if TYPE_CHECKING:
     from tensorflow.python.types.core import GenericFunction
-
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ LABEL_SUB_KEY = IDS
 
 
 # noinspection PyMethodOverriding
-class RasaModel(TmpKerasModel):
+class RasaModel(Model):
     """Abstract custom Keras model.
 
      This model overwrites the following methods:
@@ -87,16 +89,24 @@ class RasaModel(TmpKerasModel):
 
         self._training = None  # training phase should be defined when building a graph
 
+        if random_seed is None:
+            random_seed = int(time.time())
         self.random_seed = random_seed
         self._set_random_seed()
 
         self._tf_predict_step: Optional["GenericFunction"] = None
         self.prepared_for_prediction = False
 
+        self._checkpoint = tf.train.Checkpoint(model=self)
+
     def _set_random_seed(self) -> None:
         random.seed(self.random_seed)
-        tf.random.set_seed(self.random_seed)
         np.random.seed(self.random_seed)
+        tf.random.set_seed(self.random_seed)
+        tf.experimental.numpy.random.seed(self.random_seed)
+        tf.keras.utils.set_random_seed(self.random_seed)
+        # Set a fixed value for the hash seed
+        os.environ["PYTHONHASHSEED"] = str(self.random_seed)
 
     def batch_loss(
         self, batch_in: Union[Tuple[tf.Tensor, ...], Tuple[np.ndarray, ...]]
@@ -234,7 +244,8 @@ class RasaModel(TmpKerasModel):
         element_spec = []
         for tensor in batch_in:
             if len(tensor.shape) > 1:
-                shape = [None] * (len(tensor.shape) - 1) + [tensor.shape[-1]]
+                shape: List[Union[None, int]] = [None] * (len(tensor.shape) - 1)
+                shape += [tensor.shape[-1]]
             else:
                 shape = [None]
             element_spec.append(tf.TensorSpec(shape, tensor.dtype))
@@ -330,9 +341,9 @@ class RasaModel(TmpKerasModel):
 
     @staticmethod
     def _merge_batch_outputs(
-        all_outputs: Dict[Text, Union[np.ndarray, Dict[Text, np.ndarray]]],
+        all_outputs: Dict[Text, Union[np.ndarray, Dict[Text, Any]]],
         batch_output: Dict[Text, Union[np.ndarray, Dict[Text, np.ndarray]]],
-    ) -> Dict[Text, Union[np.ndarray, Dict[Text, np.ndarray]]]:
+    ) -> Dict[Text, Union[np.ndarray, Dict[Text, Any]]]:
         """Merges a batch's output into the output for all batches.
 
         Function assumes that the schema of batch output remains the same,
@@ -367,7 +378,7 @@ class RasaModel(TmpKerasModel):
 
         def _recurse(
             x: Union[Dict[Text, Any], List[Any], np.ndarray]
-        ) -> Optional[Union[Dict[Text, Any], List[np.ndarray]]]:
+        ) -> Optional[Union[Dict[Text, Any], List[Any], np.ndarray]]:
             if isinstance(x, dict):
                 return {k: _recurse(v) for k, v in x.items()}
             elif (isinstance(x, list) or isinstance(x, np.ndarray)) and np.size(x) == 0:
@@ -424,8 +435,12 @@ class RasaModel(TmpKerasModel):
         # create empty model
         model = cls(*args, **kwargs)
         learning_rate = kwargs.get("config", {}).get(LEARNING_RATE, 0.001)
+        run_eagerly = kwargs.get("config", {}).get(RUN_EAGERLY)
+
         # need to train on 1 example to build weights of the correct size
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate))
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate), run_eagerly=run_eagerly
+        )
         data_generator = RasaBatchDataGenerator(model_data_example, batch_size=1)
         model.fit(data_generator, verbose=False)
         # load trained weights
@@ -441,7 +456,7 @@ class RasaModel(TmpKerasModel):
 
     @staticmethod
     def batch_to_model_data_format(
-        batch: Union[Tuple[tf.Tensor, ...], Tuple[np.ndarray, ...]],
+        batch: MaybeNestedBatchData,
         data_signature: Dict[Text, Dict[Text, List[FeatureSignature]]],
     ) -> Dict[Text, Dict[Text, List[tf.Tensor]]]:
         """Convert input batch tensors into batch data format.
@@ -454,8 +469,7 @@ class RasaModel(TmpKerasModel):
         # during training batch is a tuple of input and target data
         # as our target data is inside the input data, we are just interested in the
         # input data
-        if isinstance(batch[0], Tuple):
-            batch = batch[0]
+        unpacked_batch = batch[0] if isinstance(batch[0], Tuple) else batch
 
         batch_data: Dict[Text, Dict[Text, List[tf.Tensor]]] = defaultdict(
             lambda: defaultdict(list)
@@ -471,11 +485,11 @@ class RasaModel(TmpKerasModel):
                     )
                     if is_sparse:
                         tensor, idx = RasaModel._convert_sparse_features(
-                            batch, feature_dimension, idx, number_of_dimensions
+                            unpacked_batch, feature_dimension, idx, number_of_dimensions
                         )
                     else:
                         tensor, idx = RasaModel._convert_dense_features(
-                            batch, feature_dimension, idx, number_of_dimensions
+                            unpacked_batch, feature_dimension, idx, number_of_dimensions
                         )
                     batch_data[key][sub_key].append(tensor)
 
@@ -483,22 +497,23 @@ class RasaModel(TmpKerasModel):
 
     @staticmethod
     def _convert_dense_features(
-        batch: Union[Tuple[tf.Tensor], Tuple[np.ndarray]],
+        batch: BatchData,
         feature_dimension: int,
         idx: int,
         number_of_dimensions: int,
     ) -> Tuple[tf.Tensor, int]:
-        if isinstance(batch[idx], tf.Tensor):
+        batch_at_idx = batch[idx]
+        if isinstance(batch_at_idx, tf.Tensor):
             # explicitly substitute last dimension in shape with known
             # static value
             if number_of_dimensions > 1 and (
-                batch[idx].shape is None or batch[idx].shape[-1] is None
+                batch_at_idx.shape is None or batch_at_idx.shape[-1] is None
             ):
                 shape: List[Optional[int]] = [None] * (number_of_dimensions - 1)
                 shape.append(feature_dimension)
-                batch[idx].set_shape(shape)
+                batch_at_idx.set_shape(shape)
 
-            return batch[idx], idx + 1
+            return batch_at_idx, idx + 1
 
         # convert to Tensor
         return (
@@ -508,7 +523,7 @@ class RasaModel(TmpKerasModel):
 
     @staticmethod
     def _convert_sparse_features(
-        batch: Union[Tuple[tf.Tensor, ...], Tuple[np.ndarray, ...]],
+        batch: BatchData,
         feature_dimension: int,
         idx: int,
         number_of_dimensions: int,
@@ -709,7 +724,10 @@ class TransformerRasaModel(RasaModel):
         Args:
             data_example: a data example that is stored with the ML component.
         """
-        self.compile(optimizer=tf.keras.optimizers.Adam(self.config[LEARNING_RATE]))
+        self.compile(
+            optimizer=tf.keras.optimizers.Adam(self.config[LEARNING_RATE]),
+            run_eagerly=self.config[RUN_EAGERLY],
+        )
         label_key = LABEL_KEY if self.config[INTENT_CLASSIFICATION] else None
         label_sub_key = LABEL_SUB_KEY if self.config[INTENT_CLASSIFICATION] else None
 

@@ -1,4 +1,5 @@
-from typing import List, Union, Text, Optional, Any, Tuple, Dict
+import math
+from typing import List, Union, Text, Optional, Any, Tuple, Dict, cast
 
 import logging
 import scipy.sparse
@@ -112,7 +113,7 @@ class RasaDataGenerator(Sequence):
                     else:
                         _data = v[:]
 
-                    if _data.is_sparse:
+                    if cast(FeatureArray, _data).is_sparse:
                         batch_data.extend(
                             RasaDataGenerator._scipy_matrix_to_values(_data)
                         )
@@ -270,7 +271,10 @@ class RasaDataGenerator(Sequence):
         # transformation does not work (e.g. you cannot access x.row, x.col)
         if not isinstance(array_of_array_of_sparse[0][0], scipy.sparse.coo_matrix):
             array_of_array_of_sparse = [
-                [x.tocoo() for x in array_of_sparse]
+                [
+                    x.tocoo() if isinstance(x, scipy.sparse.spmatrix) else x
+                    for x in array_of_sparse
+                ]
                 for array_of_sparse in array_of_array_of_sparse
             ]
 
@@ -377,7 +381,11 @@ class RasaBatchDataGenerator(RasaDataGenerator):
         # data was rebalanced, so need to recalculate number of examples
         num_examples = self.model_data.number_of_examples(self._data)
         batch_size = self._current_batch_size
-        return num_examples // batch_size + int(num_examples % batch_size > 0)
+        # keep last batch only if it has at least half a batch size of examples
+        last_batch_half_full = num_examples % batch_size >= math.ceil(batch_size / 2)
+        num_batches = num_examples // batch_size + int(last_batch_half_full)
+        # Return at least 1 if there is an example
+        return max(num_batches, int(num_examples > 0))
 
     def __getitem__(self, index: int) -> Tuple[Any, Any]:
         """Gets batch at position `index`.

@@ -3,6 +3,8 @@ import sys
 from typing import Callable
 from _pytest.pytester import RunResult
 
+from tests.cli.conftest import RASA_EXE
+
 
 def test_run_does_not_start(run_in_simple_project: Callable[..., RunResult]):
     os.remove("domain.yml")
@@ -25,16 +27,17 @@ def test_run_help(
         # Python 3.9 and above. The difference is the changed formatting of help
         # output for CLI arguments with `nargs="*"
         version_dependent = """[-i INTERFACE] [-p PORT] [-t AUTH_TOKEN] [--cors [CORS ...]]
-                [--enable-api] [--response-timeout RESPONSE_TIMEOUT]"""
+                [--enable-api] [--response-timeout RESPONSE_TIMEOUT]"""  # noqa: E501
     else:
         version_dependent = """[-i INTERFACE] [-p PORT] [-t AUTH_TOKEN]
                 [--cors [CORS [CORS ...]]] [--enable-api]
                 [--response-timeout RESPONSE_TIMEOUT]"""
 
     help_text = (
-        """usage: rasa run [-h] [-v] [-vv] [--quiet] [-m MODEL] [--log-file LOG_FILE]
-                [--use-syslog] [--syslog-address SYSLOG_ADDRESS]
-                [--syslog-port SYSLOG_PORT]
+        f"""usage: {RASA_EXE} run [-h] [-v] [-vv] [--quiet]
+                [--logging-config-file LOGGING_CONFIG_FILE] [-m MODEL]
+                [--log-file LOG_FILE] [--use-syslog]
+                [--syslog-address SYSLOG_ADDRESS] [--syslog-port SYSLOG_PORT]
                 [--syslog-protocol SYSLOG_PROTOCOL] [--endpoints ENDPOINTS]
                 """
         + version_dependent
@@ -44,15 +47,15 @@ def test_run_help(
                 [--ssl-keyfile SSL_KEYFILE] [--ssl-ca-file SSL_CA_FILE]
                 [--ssl-password SSL_PASSWORD] [--credentials CREDENTIALS]
                 [--connector CONNECTOR] [--jwt-secret JWT_SECRET]
-                [--jwt-method JWT_METHOD]
+                [--jwt-method JWT_METHOD] [--jwt-private-key JWT_PRIVATE_KEY]
                 {actions} ... [model-as-positional-argument]"""
     )
 
     lines = help_text.split("\n")
     # expected help text lines should appear somewhere in the output
-    printed_help = set(output.outlines)
+    printed_help = {line.strip() for line in output.outlines}
     for line in lines:
-        assert line in printed_help
+        assert line.strip() in printed_help
 
 
 def test_run_action_help(
@@ -64,14 +67,16 @@ def test_run_action_help(
         # This is required because `argparse` behaves differently on
         # Python 3.9 and above. The difference is the changed formatting of help
         # output for CLI arguments with `nargs="*"
-        help_text = """usage: rasa run actions [-h] [-v] [-vv] [--quiet] [-p PORT]
+        help_text = f"""usage: {RASA_EXE} run actions [-h] [-v] [-vv] [--quiet]
+                        [--logging-config-file LOGGING_CONFIG_FILE] [-p PORT]
                         [--cors [CORS ...]] [--actions ACTIONS]"""
     else:
-        help_text = """usage: rasa run actions [-h] [-v] [-vv] [--quiet] [-p PORT]
+        help_text = f"""usage: {RASA_EXE} run actions [-h] [-v] [-vv] [--quiet]
+                        [--logging-config-file LOGGING_CONFIG_FILE] [-p PORT]
                         [--cors [CORS [CORS ...]]] [--actions ACTIONS]"""
 
     lines = help_text.split("\n")
     # expected help text lines should appear somewhere in the output
-    printed_help = set(output.outlines)
+    printed_help = {line.strip() for line in output.outlines}
     for line in lines:
-        assert line in printed_help
+        assert line.strip() in printed_help

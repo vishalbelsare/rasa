@@ -90,7 +90,7 @@ class SlotMapping:
             active_loop_match = any(match_list)
 
         if active_loop_match:
-            form_ignored_intents = domain.forms[active_loop_name].get(
+            form_ignored_intents = domain.forms.get(active_loop_name, {}).get(
                 IGNORED_INTENTS, []
             )
             ignored_intents = SlotMapping.to_list(form_ignored_intents)
@@ -204,14 +204,17 @@ class SlotMapping:
 
         if (
             mapping_type == SlotMappingType.FROM_INTENT
-            and mapping.get(INTENT) not in domain.intents
+            and mapping.get(INTENT) is not None
         ):
-            rasa.shared.utils.io.raise_warning(
-                f"Slot '{slot_name}' uses a 'from_intent' mapping for "
-                f"a non-existent intent '{mapping.get('intent')}'. "
-                f"Skipping slot extraction because of invalid mapping."
-            )
-            return False
+            intent_list = SlotMapping.to_list(mapping.get(INTENT))
+            for intent in intent_list:
+                if intent and intent not in domain.intents:
+                    rasa.shared.utils.io.raise_warning(
+                        f"Slot '{slot_name}' uses a 'from_intent' mapping for "
+                        f"a non-existent intent '{mapping.get('intent')}'. "
+                        f"Skipping slot extraction because of invalid mapping."
+                    )
+                    return False
 
         return True
 

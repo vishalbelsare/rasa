@@ -1,5 +1,6 @@
 import logging
 import uuid
+import json
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Text
 
 import rasa.core.channels.channel
@@ -48,22 +49,19 @@ class SocketIOOutput(OutputChannel):
 
     async def _send_message(self, socket_id: Text, response: Any) -> None:
         """Sends a message to the recipient using the bot event."""
-
         await self.sio.emit(self.bot_message_evt, response, room=socket_id)
 
     async def send_text_message(
         self, recipient_id: Text, text: Text, **kwargs: Any
     ) -> None:
         """Send a message through this channel."""
-
         for message_part in text.strip().split("\n\n"):
             await self._send_message(recipient_id, {"text": message_part})
 
     async def send_image_url(
         self, recipient_id: Text, image: Text, **kwargs: Any
     ) -> None:
-        """Sends an image to the output"""
-
+        """Sends an image to the output."""
         message = {"attachment": {"type": "image", "payload": {"src": image}}}
         await self._send_message(recipient_id, message)
 
@@ -75,7 +73,6 @@ class SocketIOOutput(OutputChannel):
         **kwargs: Any,
     ) -> None:
         """Sends buttons to the output."""
-
         # split text and create a message for each text fragment
         # the `or` makes sure there is at least one message we can attach the quick
         # replies to
@@ -101,7 +98,6 @@ class SocketIOOutput(OutputChannel):
         self, recipient_id: Text, elements: Iterable[Dict[Text, Any]], **kwargs: Any
     ) -> None:
         """Sends elements to the output."""
-
         for element in elements:
             message = {
                 "attachment": {
@@ -115,8 +111,7 @@ class SocketIOOutput(OutputChannel):
     async def send_custom_json(
         self, recipient_id: Text, json_message: Dict[Text, Any], **kwargs: Any
     ) -> None:
-        """Sends custom json to the output"""
-
+        """Sends custom json to the output."""
         json_message.setdefault("room", recipient_id)
 
         await self.sio.emit(self.bot_message_evt, **json_message)
@@ -146,6 +141,7 @@ class SocketIOInput(InputChannel):
             credentials.get("socketio_path", "/socket.io"),
             credentials.get("jwt_key"),
             credentials.get("jwt_method", "HS256"),
+            credentials.get("metadata_key", "metadata"),
         )
 
     def __init__(
@@ -157,6 +153,7 @@ class SocketIOInput(InputChannel):
         socketio_path: Optional[Text] = "/socket.io",
         jwt_key: Optional[Text] = None,
         jwt_method: Optional[Text] = "HS256",
+        metadata_key: Optional[Text] = "metadata",
     ):
         """Creates a ``SocketIOInput`` object."""
         self.bot_message_evt = bot_message_evt
@@ -165,6 +162,7 @@ class SocketIOInput(InputChannel):
         self.namespace = namespace
         self.socketio_path = socketio_path
         self.sio: Optional[AsyncServer] = None
+        self.metadata_key = metadata_key
 
         self.jwt_key = jwt_key
         self.jwt_algorithm = jwt_method
@@ -251,8 +249,15 @@ class SocketIOInput(InputChannel):
             else:
                 sender_id = sid
 
+            metadata = data.get(self.metadata_key, {})
+            if isinstance(metadata, Text):
+                metadata = json.loads(metadata)
             message = UserMessage(
-                data["message"], output_channel, sender_id, input_channel=self.name()
+                data.get("message", ""),
+                output_channel,
+                sender_id,
+                input_channel=self.name(),
+                metadata=metadata,
             )
             await on_new_message(message)
 

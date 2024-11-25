@@ -1,6 +1,8 @@
+import copy
 from typing import Text, List, Optional, Union, Any, Dict, Set
 import itertools
 import logging
+import structlog
 import json
 
 from rasa.core.actions import action
@@ -31,6 +33,7 @@ from rasa.shared.core.trackers import DialogueStateTracker
 from rasa.utils.endpoints import EndpointConfig
 
 logger = logging.getLogger(__name__)
+structlogger = structlog.get_logger()
 
 
 class FormAction(LoopAction):
@@ -254,7 +257,9 @@ class FormAction(LoopAction):
             Otherwise, returns empty list since the extracted slots already have
             corresponding `SlotSet` events in the tracker.
         """
-        logger.debug(f"Validating extracted slots: {slot_candidates}")
+        structlogger.debug(
+            "forms.slots.validate", slot_candidates=copy.deepcopy(slot_candidates)
+        )
         events: List[Union[SlotSet, Event]] = [
             SlotSet(slot_name, value) for slot_name, value in slot_candidates.items()
         ]
@@ -336,10 +341,7 @@ class FormAction(LoopAction):
         domain: Domain,
         slot_values: Dict[Text, Any],
     ) -> Dict[Text, Any]:
-        slot_mappings = self.get_mappings_for_slot(event.key, domain)
-
-        for mapping in slot_mappings:
-            slot_values[event.key] = event.value
+        slot_values[event.key] = event.value
 
         return slot_values
 
@@ -534,17 +536,17 @@ class FormAction(LoopAction):
            - the form is called after `action_listen`
            - form validation was not cancelled
         """
-        # No active_loop means there are no form filled slots to validate yet
-        if not tracker.active_loop:
-            return []
-
-        needs_validation = (
+        # no active_loop means that it is called during activation
+        needs_validation = not tracker.active_loop or (
             tracker.latest_action_name == ACTION_LISTEN_NAME
             and not tracker.is_active_loop_interrupted
         )
 
         if needs_validation:
-            logger.debug(f"Validating user input '{tracker.latest_message}'.")
+            structlogger.debug(
+                "forms.validation.required",
+                tracker_latest_message=copy.deepcopy(tracker.latest_message),
+            )
             return await self.validate(tracker, domain, output_channel, nlg)
         else:
             # Needed to determine which slots to request although there are no slots
@@ -611,9 +613,24 @@ class FormAction(LoopAction):
 
         if not prefilled_slots:
             logger.debug("No pre-filled required slots to validate.")
-            return []
+        else:
+            structlogger.debug(
+                "forms.validate.prefilled_slots",
+                prefilled_slots=copy.deepcopy(prefilled_slots),
+            )
 
-        logger.debug(f"Validating pre-filled required slots: {prefilled_slots}")
+        validate_name = f"validate_{self.name()}"
+
+        if validate_name not in domain.action_names_or_texts:
+            logger.debug(
+                f"There is no validation action '{validate_name}' "
+                f"to execute at form activation."
+            )
+            return [event for event in extraction_events if isinstance(event, SlotSet)]
+
+        logger.debug(
+            f"Executing validation action '{validate_name}' at form activation."
+        )
 
         validated_events = await self.validate_slots(
             prefilled_slots, tracker, domain, output_channel, nlg
@@ -638,7 +655,24 @@ class FormAction(LoopAction):
         events_so_far: List[Event],
     ) -> List[Event]:
         """Executes form loop after activation."""
-        events = await self._validate_if_required(tracker, domain, output_channel, nlg)
+        events: List[Event] = []
+        """
+        Call to validation is not required when the slots are already validated
+        at the time of form activation.
+        events_so_far:
+            - empty when slots have not been validated.
+            - has SlotSet objects when already validated.
+            - ActiveLoop object when events have not been validated.
+        Hence the events are filtered to remove ActiveLoop object that was added
+        at the time of form activation.
+        """
+        filtered_events = [
+            event for event in events_so_far if not isinstance(event, ActiveLoop)
+        ]
+        if not filtered_events:
+            events = await self._validate_if_required(
+                tracker, domain, output_channel, nlg
+            )
 
         if not self._user_rejected_manually(events):
             events += await self.request_next_slot(
@@ -664,25 +698,22 @@ class FormAction(LoopAction):
         # We explicitly check only the last occurrences for each possible termination
         # event instead of doing `return event in events_so_far` to make it possible
         # to override termination events which were returned earlier.
-        return (
-            next(
-                (
-                    event
-                    for event in reversed(events_so_far)
-                    if isinstance(event, SlotSet) and event.key == REQUESTED_SLOT
-                ),
-                None,
-            )
-            == SlotSet(REQUESTED_SLOT, None)
-            or next(
-                (
-                    event
-                    for event in reversed(events_so_far)
-                    if isinstance(event, ActiveLoop)
-                ),
-                None,
-            )
-            == ActiveLoop(None)
+        return next(
+            (
+                event
+                for event in reversed(events_so_far)
+                if isinstance(event, SlotSet) and event.key == REQUESTED_SLOT
+            ),
+            None,
+        ) == SlotSet(REQUESTED_SLOT, None) or next(
+            (
+                event
+                for event in reversed(events_so_far)
+                if isinstance(event, ActiveLoop)
+            ),
+            None,
+        ) == ActiveLoop(
+            None
         )
 
     async def deactivate(self, *args: Any, **kwargs: Any) -> List[Event]:

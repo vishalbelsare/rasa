@@ -247,11 +247,10 @@ class EvaluationStore:
         i_pred: int,
         i_target: int,
     ) -> int:
-        """
-        Compare the current predicted and target entities and decide which one
+        """Compare the current predicted and target entities and decide which one
         comes first. If the predicted entity comes first it returns -1,
         while it returns 1 if the target entity comes first.
-        If target and predicted are aligned it returns 0
+        If target and predicted are aligned it returns 0.
         """
         pred = None
         target = None
@@ -299,14 +298,14 @@ class EvaluationStore:
                 filter(
                     lambda x: x.get(ENTITY_ATTRIBUTE_TEXT) == text, self.entity_targets
                 ),
-                key=lambda x: x[ENTITY_ATTRIBUTE_START],  # type: ignore[misc]
+                key=lambda x: x[ENTITY_ATTRIBUTE_START],  # type: ignore[literal-required] # noqa: E501
             )
             entity_predictions = sorted(
                 filter(
                     lambda x: x.get(ENTITY_ATTRIBUTE_TEXT) == text,
                     self.entity_predictions,
                 ),
-                key=lambda x: x[ENTITY_ATTRIBUTE_START],  # type: ignore[misc]
+                key=lambda x: x[ENTITY_ATTRIBUTE_START],  # type: ignore[literal-required] # noqa: E501
             )
 
             i_pred, i_target = 0, 0
@@ -363,7 +362,8 @@ class WronglyClassifiedUserUtterance(UserUttered):
     """The NLU model predicted the wrong user utterance.
 
     Mostly used to mark wrong predictions and be able to
-    dump them as stories."""
+    dump them as stories.
+    """
 
     type_name = "wrong_utterance"
 
@@ -471,7 +471,7 @@ def _clean_entity_results(
                     # convert values to strings for evaluation as
                     # target values are all of type string
                     r[k] = str(r[k])
-                cleaned_entity[k] = r[k]  # type: ignore[misc]
+                cleaned_entity[k] = r[k]  # type: ignore[literal-required]
         cleaned_entities.append(cleaned_entity)
 
     return cleaned_entities

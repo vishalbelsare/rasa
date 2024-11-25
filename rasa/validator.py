@@ -1,4 +1,3 @@
-import itertools
 import logging
 from collections import defaultdict
 from typing import Set, Text, Optional, Dict, Any, List
@@ -6,6 +5,9 @@ from typing import Set, Text, Optional, Dict, Any, List
 import rasa.core.training.story_conflict
 import rasa.shared.nlu.constants
 from rasa.shared.constants import (
+    ASSISTANT_ID_DEFAULT_VALUE,
+    ASSISTANT_ID_KEY,
+    CONFIG_MANDATORY_KEYS,
     DOCS_URL_DOMAINS,
     DOCS_URL_FORMS,
     UTTER_PREFIX,
@@ -48,6 +50,7 @@ class Validator:
         self.domain = domain
         self.intents = intents
         self.story_graph = story_graph
+        self.config = config or {}
 
     @classmethod
     def from_importer(cls, importer: TrainingDataImporter) -> "Validator":
@@ -78,7 +81,7 @@ class Validator:
                     f"The intent '{intent}' is listed in the domain file, but "
                     f"is not found in the NLU training data."
                 )
-                everything_is_alright = ignore_warnings and everything_is_alright
+                everything_is_alright = ignore_warnings or everything_is_alright
 
         for intent in nlu_data_intents:
             if intent not in self.domain.intents:
@@ -88,7 +91,7 @@ class Validator:
                     f"should need to add that intent to your domain file!",
                     docs=DOCS_URL_DOMAINS,
                 )
-                everything_is_alright = False
+                everything_is_alright = ignore_warnings
 
         return everything_is_alright
 
@@ -96,7 +99,6 @@ class Validator:
         self, ignore_warnings: bool = True
     ) -> bool:
         """Checks if there is no duplicated example in different intents."""
-
         everything_is_alright = True
 
         duplication_hash = defaultdict(set)
@@ -107,7 +109,7 @@ class Validator:
         for text, intents in duplication_hash.items():
 
             if len(duplication_hash[text]) > 1:
-                everything_is_alright = ignore_warnings and everything_is_alright
+                everything_is_alright = ignore_warnings
                 intents_string = ", ".join(sorted(intents))
                 rasa.shared.utils.io.raise_warning(
                     f"The example '{text}' was found labeled with multiple "
@@ -121,9 +123,9 @@ class Validator:
         """Checks intents used in stories.
 
         Verifies if the intents used in the stories are valid, and whether
-        all valid intents are used in the stories."""
-
-        everything_is_alright = self.verify_intents(ignore_warnings)
+        all valid intents are used in the stories.
+        """
+        everything_is_alright = self.verify_intents(ignore_warnings=ignore_warnings)
 
         stories_intents = {
             event.intent["name"]
@@ -140,14 +142,14 @@ class Validator:
                     f"domain file!",
                     docs=DOCS_URL_DOMAINS,
                 )
-                everything_is_alright = False
+                everything_is_alright = ignore_warnings
 
         for intent in self._non_default_intents():
             if intent not in stories_intents:
                 rasa.shared.utils.io.raise_warning(
                     f"The intent '{intent}' is not used in any story or rule."
                 )
-                everything_is_alright = ignore_warnings and everything_is_alright
+                everything_is_alright = ignore_warnings or everything_is_alright
 
         return everything_is_alright
 
@@ -204,7 +206,7 @@ class Validator:
                         f"template defined with its name.",
                         docs=DOCS_URL_ACTIONS + "#utterance-actions",
                     )
-                    everything_is_alright = False
+                    everything_is_alright = ignore_warnings
                 stories_utterances.add(event.action_name)
 
         for utterance in utterance_actions:
@@ -212,7 +214,7 @@ class Validator:
                 rasa.shared.utils.io.raise_warning(
                     f"The utterance '{utterance}' is not used in any story or rule."
                 )
-                everything_is_alright = ignore_warnings and everything_is_alright
+                everything_is_alright = ignore_warnings or everything_is_alright
 
         return everything_is_alright
 
@@ -234,7 +236,7 @@ class Validator:
                     # To support setting `active_loop` to `null`
                     continue
 
-                if event.name not in self.domain.form_names:
+                if event.name not in self.domain.action_names_or_texts:
                     rasa.shared.utils.io.raise_warning(
                         f"The form '{event.name}' is used in the "
                         f"'{story.block_name}' block, but it "
@@ -294,7 +296,6 @@ class Validator:
             `False` is a conflict was found and `ignore_warnings` is `False`.
             `True` otherwise.
         """
-
         logger.info("Story structure validation...")
 
         trackers = TrainingDataGenerator(
@@ -319,7 +320,6 @@ class Validator:
 
     def verify_nlu(self, ignore_warnings: bool = True) -> bool:
         """Runs all the validations on intents and utterances."""
-
         logger.info("Validating intents...")
         intents_are_valid = self.verify_intents_in_stories(ignore_warnings)
 
@@ -357,16 +357,11 @@ class Validator:
         """Verifies that slot mappings match forms."""
         everything_is_alright = True
 
-        all_form_slots = [
-            required_slots[REQUIRED_SLOTS_KEY]
-            for required_slots in self.domain.forms.values()
-        ]
-        all_required_slots = set(itertools.chain.from_iterable(all_form_slots))
-
         for slot in self.domain.slots:
             for mapping in slot.mappings:
                 for condition in mapping.get(MAPPING_CONDITIONS, []):
                     condition_active_loop = condition.get(ACTIVE_LOOP)
+                    mapping_type = SlotMappingType(mapping.get(MAPPING_TYPE))
                     if (
                         condition_active_loop
                         and condition_active_loop not in self.domain.form_names
@@ -382,7 +377,11 @@ class Validator:
                     form_slots = self.domain.forms.get(condition_active_loop, {}).get(
                         REQUIRED_SLOTS_KEY, {}
                     )
-                    if form_slots and slot.name not in form_slots:
+                    if (
+                        form_slots
+                        and slot.name not in form_slots
+                        and mapping_type != SlotMappingType.FROM_TRIGGER_INTENT
+                    ):
                         rasa.shared.utils.io.raise_warning(
                             f"Slot '{slot.name}' has a mapping condition for form "
                             f"'{condition_active_loop}', but it's not present in "
@@ -390,16 +389,6 @@ class Validator:
                             f"The slot needs to be added to this key."
                         )
                         everything_is_alright = False
-
-                if (
-                    mapping[MAPPING_TYPE] == str(SlotMappingType.FROM_TRIGGER_INTENT)
-                    and slot.name not in all_required_slots
-                ):
-                    rasa.shared.utils.io.raise_warning(
-                        f"Slot '{slot.name}' has a 'from_trigger_intent' mapping, "
-                        f"but it's not listed in any form '{REQUIRED_SLOTS_KEY}'."
-                    )
-                    everything_is_alright = False
 
         return everything_is_alright
 
@@ -422,3 +411,24 @@ class Validator:
                 return False
 
         return True
+
+    def warn_if_config_mandatory_keys_are_not_set(self) -> None:
+        """Raises a warning if mandatory keys are not present in the config.
+
+        Additionally, raises a UserWarning if the assistant_id key is filled with the
+        default placeholder value.
+        """
+        for key in set(CONFIG_MANDATORY_KEYS):
+            if key not in self.config:
+                rasa.shared.utils.io.raise_warning(
+                    f"The config file is missing the '{key}' mandatory key."
+                )
+
+        assistant_id = self.config.get(ASSISTANT_ID_KEY)
+
+        if assistant_id is not None and assistant_id == ASSISTANT_ID_DEFAULT_VALUE:
+            rasa.shared.utils.io.raise_warning(
+                f"The config file is missing a unique value for the "
+                f"'{ASSISTANT_ID_KEY}' mandatory key. Please replace the default "
+                f"placeholder value with a unique identifier."
+            )

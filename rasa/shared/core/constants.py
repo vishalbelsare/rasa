@@ -24,6 +24,7 @@ LOOP_NAME = "name"
 
 ACTION_LISTEN_NAME = "action_listen"
 ACTION_RESTART_NAME = "action_restart"
+ACTION_SEND_TEXT_NAME = "action_send_text"
 ACTION_SESSION_START_NAME = "action_session_start"
 ACTION_DEFAULT_FALLBACK_NAME = "action_default_fallback"
 ACTION_DEACTIVATE_LOOP_NAME = "action_deactivate_loop"
@@ -49,9 +50,12 @@ DEFAULT_ACTION_NAMES = [
     ACTION_TWO_STAGE_FALLBACK_NAME,
     ACTION_UNLIKELY_INTENT_NAME,
     ACTION_BACK_NAME,
+    ACTION_SEND_TEXT_NAME,
     RULE_SNIPPET_ACTION_NAME,
     ACTION_EXTRACT_SLOTS,
 ]
+
+ACTION_SHOULD_SEND_DOMAIN = "send_domain"
 
 # rules allow setting a value of slots or active_loops to None;
 # generator substitutes `None`s with this constant to notify rule policy that
